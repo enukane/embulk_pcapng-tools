@@ -1,0 +1,120 @@
+#!/usr/bin/env ruby
+
+# embulk pcapng-files to PostgreSQL schema
+
+require "optparse"
+require "yaml"
+require "json"
+
+class Pcapng2PGSQL
+  def self.default_options
+    {
+      :input => nil,
+      :output => STDOUT,
+      :table => "pcapng",
+    }
+  end
+
+  def initialize opts={}
+    @in_config = opts[:input]
+    @output = opts[:output]
+
+    @table = opts[:table]
+
+    @convertdot = nil
+    @schema = nil
+
+    load(@in_config)
+  end
+
+  def load(fname)
+    @in_config = File.open(fname) do |f|
+      YAML.load(f.read)
+    end
+    @convertdot = @in_config["in"]["convertdot"]
+  rescue => e
+    print "ERROR: loading error #{e}\n"
+  end
+
+  def parse
+    columns_str = ""
+    columns_str += new_column("path", "string")
+    @in_config["in"]["schema"].each do |entry|
+      columns_str += ", #{new_column(entry["name"], entry["type"])}"
+    end
+
+    @schema = "CREATE TABLE #{@table} (#{columns_str});"
+  end
+
+  def output
+    if @output.is_a?(IO)
+      @output.puts @schema
+    else
+      File.open(@output, "w") do |f|
+        f.puts(@schema)
+      end
+    end
+  end
+
+  def new_column name, type
+    name = case @convertdot
+           when nil, false
+             name
+           else
+             name.gsub('.', @convertdot)
+           end
+    return "\"#{name}\" #{get_type(type)}"
+  end
+
+  def get_type type
+    case type
+    when "long"
+      "int"
+    when "double"
+      "double precision"
+    when "timestamp"
+      "timestamp"
+    else
+      "varchar (256)"
+    end
+  end
+end
+
+opt = OptionParser.new
+OPTS=Pcapng2PGSQL.default_options
+
+opt.on('-i', "--input [embulkconfig]", "config to parse") {|v|
+  OPTS[:input] = v
+}
+
+opt.on('-o', "--output [OUTPUT]", "output") {|v|
+  OPTS[:output] = v
+}
+
+opt.on('-t', "--table [TABLE]", "table name to create") {|v|
+  OPTS[:table] = v
+}
+
+(class<<self;self;end).module_eval do
+  define_method(:usage) do |msg|
+    puts opt.to_s
+    puts "error: #{msg}" if msg
+    exit 1
+  end
+end
+
+begin
+  rest = opt.parse(ARGV)
+  if OPTS[:input] == nil
+    usage nil
+  end
+  if rest.length != 0
+    usage nil
+  end
+rescue
+  usage $!.to_s
+end
+
+pcap2pg = Pcapng2PGSQL.new(OPTS)
+pcap2pg.parse
+pcap2pg.output

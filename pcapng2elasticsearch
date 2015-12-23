@@ -1,0 +1,125 @@
+#!/usr/bin/env ruby
+
+# embulk pcapng-files to ElasticSearch schema
+
+require "optparse"
+require "yaml"
+require "json"
+
+class Pcapng2ES
+  def self.default_options
+    {
+      :input => nil,
+      :index => "pcapng",
+      :output => STDOUT,
+    }
+  end
+
+  def initialize opts={}
+    @in_config = opts[:input]
+    @output = opts[:output]
+
+    @index = opts[:index]
+
+    @convertdot = nil
+    @schema = nil
+
+    load(@in_config)
+  end
+
+  def load(fname)
+    @in_config = File.open(fname) do |f|
+      YAML.load(f.read)
+    end
+    @convertdot = @in_config["in"]["convertdot"]
+  rescue => e
+    print "ERROR: loading error #{e}\n"
+  end
+
+  def parse
+    @properties = { "path" =>  { "type" => get_type("string") } }
+    @in_config["in"]["schema"].each do |entry|
+      name = case @convertdot
+             when nil, false
+               entry["name"]
+             else
+               entry["name"].gsub('.', @convertdot)
+             end
+      type = get_type(entry["type"])
+      @properties[name] = {
+        "type" => get_type(entry["type"])
+      }
+      @properties[name]["index"] = "not_analyzed" if entry["type"] == "string"
+    end
+
+    @schema = {
+      "mappings" => {
+        @index => @properties
+      }
+    }
+
+    return @schema
+  end
+
+  def output
+    if @output.is_a?(IO)
+      @output.puts JSON.dump(@schema)
+    else
+      File.open(@output, "w") do |f|
+        f.puts(JSON.dump(@schema))
+      end
+    end
+  end
+
+  def get_type type
+    case type
+    when "long"
+      "integer"
+    when "double"
+      "float"
+    when "timestamp"
+      "date"
+    else
+      "string"
+    end
+  end
+end
+
+opt = OptionParser.new
+OPTS=Pcapng2ES.default_options
+
+opt.on('-i', "--input [embulkconfig]", "config to parse") {|v|
+  OPTS[:input] = v
+}
+
+opt.on('-o', "--output [OUTPUT]", "output") {|v|
+  OPTS[:output] = v
+}
+
+opt.on('-I', "--index [INDEX]", "index name to create") {|v|
+  OPTS[:index] = v
+}
+
+(class<<self;self;end).module_eval do
+  define_method(:usage) do |msg|
+    puts opt.to_s
+    puts "error: #{msg}" if msg
+    exit 1
+  end
+end
+
+begin
+  rest = opt.parse(ARGV)
+  if OPTS[:input] == nil
+    usage nil
+  end
+  if rest.length != 0
+    usage nil
+  end
+rescue
+  usage $!.to_s
+end
+
+pcap2es = Pcapng2ES.new(OPTS)
+pcap2es.parse
+pcap2es.output
