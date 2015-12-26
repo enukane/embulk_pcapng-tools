@@ -49,12 +49,14 @@ class Pcapng2ES
       @properties[name] = {
         "type" => get_type(entry["type"])
       }
-      @properties[name]["index"] = "not_analyzed" if entry["type"] == "string"
+      @properties[name]["index"] = "analyzed" if entry["type"] == "string"
     end
 
     @schema = {
       "mappings" => {
-        @index => @properties
+        @index => {
+          "properties" => @properties
+        }
       }
     }
 
